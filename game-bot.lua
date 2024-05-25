@@ -21,7 +21,7 @@ end
 
 -- 3 * 3之内都可以攻击
 function IsCanAttack(my, other)
-    return math.abs(my.x - other.x) <= 3 and math.abs(my.y - other.y) <= 3
+    return math.abs(my.x - other.x) <= 1 and math.abs(my.y - other.y) <= 1
 end
 
 -- 根据玩家的距离和能量决定下一步行动。
@@ -36,6 +36,7 @@ function DecideNextAction()
     local targetInRange = false
     local lowHealthPlayer = nil
     local lowHealth = 20000
+    local lowHealthPlayerId = ""
     for target, other in pairs(LatestGameState.Players) do
         if target ~= ao.id and IsCanAttack(my, other) then
             targetInRange = true
@@ -44,6 +45,8 @@ function DecideNextAction()
         if other.health < lowHealth then
             lowHealth = other.health
             lowHealthPlayer = other
+            lowHealthPlayerId = target
+            
         end
     end
 
@@ -54,14 +57,32 @@ function DecideNextAction()
         local minDistance = math.sqrt((my.x - lowHealthPlayer.x) ^ 2 + (my.y - lowHealthPlayer.y) ^ 2)
         print(colors.green .. "和敌人的距离：" .. minDistance .. colors.reset)
         print("距离不够，往生命值最低的人移动")
+        print("生命值最低的人为：" .. lowHealthPlayerId)
         if my.x - lowHealthPlayer.x > 0 and my.y - lowHealthPlayer.y > 0 then
-            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "DownLeft" })
-        elseif my.x - lowHealthPlayer.x < 0 and my.y - lowHealthPlayer.y < 0 then
-            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "UpRight" })
-        elseif my.x - lowHealthPlayer.x > 0 and my.y - lowHealthPlayer.y < 0 then
-            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "UpLeft" })
-        elseif my.x - lowHealthPlayer.x < 0 and my.y - lowHealthPlayer.y > 0 then
+            print("UpLeft")
             ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "DownRight" })
+        elseif my.x - lowHealthPlayer.x < 0 and my.y - lowHealthPlayer.y < 0 then
+            print("UpLeft ")
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "UpLeft" })
+        elseif my.x - lowHealthPlayer.x > 0 and my.y - lowHealthPlayer.y < 0 then
+            print("UpRight")
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "UpRight" })
+        elseif my.x - lowHealthPlayer.x < 0 and my.y - lowHealthPlayer.y > 0 then
+            print("DownRight")
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "DownLeft" })
+        elseif my.x - lowHealthPlayer.x == 0 and my.y - lowHealthPlayer.y > 0 then
+            print("Down")
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "Down" })
+        elseif my.x - lowHealthPlayer.x == 0 and my.y - lowHealthPlayer.y < 0 then
+            print("Up")
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "Up" })
+        elseif my.x - lowHealthPlayer.x > 0 and my.y - lowHealthPlayer.y == 0 then
+            print("Left")
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "Left" })
+        elseif my.x - lowHealthPlayer.x < 0 and my.y - lowHealthPlayer.y == 0 then
+            print("Right")
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "Right" })
+        print(colors.green .. "和敌人的距离：" .. minDistance .. colors.reset)
         end
     end
     InAction = false --释放锁
@@ -82,6 +103,9 @@ Handlers.add(
         elseif (msg.Event == "Tick" or msg.Event == "Started-Game") and not InAction then
             InAction = true  -- 加锁
             ao.send({ Target = Game, Action = "GetGameState" })
+        elseif (msg.Event == "Game-Ended") then
+            print("游戏结束")
+            InAction = false
         elseif InAction then --  InAction 逻辑添加
             print("等待最新响应，跳过")
         end
@@ -122,7 +146,7 @@ Handlers.add(
         local json = require("json")
         LatestGameState = json.decode(msg.Data)
         ao.send({ Target = ao.id, Action = "UpdatedGameState" })
-        print("以获取最新状态")
+        print("已获取最新状态")
         print(LatestGameState)
     end
 )
