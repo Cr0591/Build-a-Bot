@@ -1,7 +1,12 @@
-LatestGameState = {}
-InAction = false
-Game = ""
-Colors = {
+-- pid = Xb8pn8D9fg89nHfqkjYJ3DCCgf3E51rWWQaJL2hmYI4
+-- 初始化全局变量来存储最新的游戏状态和游戏主机进程。
+LatestGameState = LatestGameState or nil
+InAction = InAction or false -- 防止代理同时采取多个操作。
+local Game = "0rVZYFxvfJpO__EfOz0_PUQ3GFE9kEaES0GkUDNXjvE"
+
+Logs = Logs or {}
+
+local colors = {
     red = "\27[31m",
     green = "\27[32m",
     blue = "\27[34m",
@@ -9,119 +14,160 @@ Colors = {
     gray = "\27[90m"
 }
 
-local function inRange(x1, y1, x2, y2, range)
-    return math.abs(x1 - x2) <= range and math.abs(y1 - y2) <= range
+function AddLog(msg, text) -- 函数定义注释用于性能，可用于调试
+    Logs[msg] = Logs[msg] or {}
+    table.insert(Logs[msg], text)
 end
 
-local function decideNextAction()
-    local player = LatestGameState.Players[ao.id]
-    local minHealthPlayer = nil
-    local minHealth = 100
-    -- Find the opponent with the lowest health
-    for target, state in pairs(LatestGameState.Players) do
-        if target ~= ao.id then
-            if state.health <= minHealth then
-                minHealth = state.health
-                minHealthPlayer = state
-            end
-        end
-    end
-    -- Check the distance to the opponent with the lowest health
-    print("Position of enemy with the lowest health: " .. minHealthPlayer.x .. minHealthPlayer.y)
-    if inRange(player.x, player.y, minHealthPlayer.x, minHealthPlayer.y) then
-        -- Distance is within range
-        if player.energy > 10 then
-            -- Energy is sufficient
-            print("Attacking enemy, consuming energy: " .. player.energy)
-            ao.send({ Target = Game, Action = "PlayerAttack", Player = ao.id, AttackEnergy = tostring(player.energy) })
-        end
-    else
-        -- Distance is not enough, move towards them
-        if player.x - minHealthPlayer.x > 0 then
-            print(colors.blue .. "Moving left" .. colors.reset)
-            ao.send({Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "Left"})
-        elseif player.x - minHealthPlayer.x < 0 then
-            print(colors.blue .. "Moving right" .. colors.reset)
-            ao.send({Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "Right"})
-        elseif player.y - minHealthPlayer.y > 0 then
-            print(colors.blue .. "Moving down" .. colors.reset)
-            ao.send({Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "Down"})
-        elseif player.y - minHealthPlayer.y < 0 then
-            print(colors.blue .. "Moving up" .. colors.reset)
-            ao.send({Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "Up"})
-        end
-    end
-    InAction = false
+-- 3 * 3之内都可以攻击
+function IsCanAttack(my, other)
+    return math.abs(my.x - other.x) <= 3 and math.abs(my.y - other.y) <= 3
 end
 
-local function handleEvent(msg)
-    if msg.Event == "Started-Waiting-Period" then
-        ao.send({ Target = ao.id, Action = "AutoPay" })
-    elseif (msg.Event == "Tick" or msg.Event == "Started-Game") and not InAction then
-        InAction = true
-        ao.send({ Target = Game, Action = "GetGameState" })
-    elseif InAction then
-        print("Previous action still in progress. Skipping.")
-    end
-    print(Colors.green .. msg.Event .. ": " .. msg.Data .. Colors.reset)
-end
-
-local function handleTick()
-    if not InAction then
-        InAction = true
-        print(Colors.gray .. "Getting game state..." .. Colors.reset)
-        ao.send({ Target = Game, Action = "GetGameState" })
-    else
-        print("Previous action still in progress. Skipping.")
-    end
-end
-
-local function handleAutoPay()
-    print("Auto-paying confirmation fees.")
-    ao.send({ Target = Game, Action = "Transfer", Recipient = Game, Quantity = "1000" })
-end
-
-local function handleUpdateGameState(msg)
-    local json = require("json")
-    LatestGameState = json.decode(msg.Data)
-    ao.send({ Target = ao.id, Action = "UpdatedGameState" })
-    print("Game state updated. Print 'LatestGameState' for detailed view.")
-end
-
-local function handleDecideNextAction()
-    if LatestGameState.GameMode ~= "Playing" then
-        InAction = false
+-- 根据玩家的距离和能量决定下一步行动。
+-- 如果有玩家在范围内，则发起攻击； 否则，随机移动。
+function DecideNextAction()
+    -- 增加判空
+    if LatestGameState == nil or LatestGameState.Players == nil then
+        print("Game state or players data is not available")
         return
     end
-    print("Deciding next action.")
-    decideNextAction()
-    ao.send({ Target = ao.id, Action = "Tick" })
-end
-
-local function handleReturnAttack(msg)
-    if not InAction then
-        InAction = true
-        local playerEnergy = LatestGameState.Players[ao.id].energy
-        if playerEnergy == nil then
-            print(Colors.red .. "Unable to read energy." .. Colors.reset)
-            ao.send({ Target = Game, Action = "Attack-Failed", Reason = "Unable to read energy." })
-        elseif playerEnergy == 0 then
-            print(Colors.red .. "Player has insufficient energy." .. Colors.reset)
-            ao.send({ Target = Game, Action = "Attack-Failed", Reason = "Player has no energy." })
-        else
-            print(Colors.red .. "Returning attack." .. Colors.reset)
-            ao.send({ Target = Game, Action = "PlayerAttack", Player = ao.id, AttackEnergy = tostring(playerEnergy) })
+    local my = LatestGameState.Players[ao.id]
+    local targetInRange = false
+    local lowHealthPlayer = nil
+    local lowHealth = 20000
+    for target, other in pairs(LatestGameState.Players) do
+        if target ~= ao.id and IsCanAttack(my, other) then
+            targetInRange = true
+            break
         end
-        InAction = false
-        ao.send({ Target = ao.id, Action = "Tick" })
-    else
-        print("Previous action still in progress. Skipping.")
+        if other.health < lowHealth then
+            lowHealth = other.health
+            lowHealthPlayer = other
+        end
     end
+
+    if my.energy > 10 and targetInRange then
+        print("开始攻击")
+        ao.send({ Target = Game, Action = "PlayerAttack", Player = ao.id, AttackEnergy = tostring(my.energy) })
+    else
+        local minDistance = math.sqrt((my.x - lowHealthPlayer.x) ^ 2 + (my.y - lowHealthPlayer.y) ^ 2)
+        print(colors.green .. "和敌人的距离：" .. minDistance .. colors.reset)
+        print("距离不够，往生命值最低的人移动")
+        if my.x - lowHealthPlayer.x > 0 and my.y - lowHealthPlayer.y > 0 then
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "DownLeft" })
+        elseif my.x - lowHealthPlayer.x < 0 and my.y - lowHealthPlayer.y < 0 then
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "UpRight" })
+        elseif my.x - lowHealthPlayer.x > 0 and my.y - lowHealthPlayer.y < 0 then
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "UpLeft" })
+        elseif my.x - lowHealthPlayer.x < 0 and my.y - lowHealthPlayer.y > 0 then
+            ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = "DownRight" })
+        end
+    end
+    InAction = false --释放锁
 end
 
-Handlers.add("PrintAnnouncements", Handlers.utils.hasMatchingTag("Action", "Announcement"), handleEvent)
-Handlers.add("AutoPay", Handlers.utils.hasMatchingTag("Action", "AutoPay"), handleAutoPay)
-Handlers.add("GetTickEval", Handlers.utils.hasMatchingTag("Action", "Tick"), handleTick)
-Handlers.add("UpdateGameState", Handlers.utils.hasMatchingTag("Action", "GameState"), handleUpdateGameState)
-Handlers.add("decideNextAction", Handlers.utils.hasMatchingTag("Action", "UpdatedGameState"), handleDecideNextAction)
-Handlers.add("ReturnAttack", Handlers.utils.hasMatchingTag("Action", "Hit"), handleReturnAttack)
+-- 打印游戏公告并触发游戏状态更新的handler。
+Handlers.add(
+    "PrintAnnouncements",
+    Handlers.utils.hasMatchingTag("Action", "Announcement"),
+    function(msg)
+        -- 增加判空
+        if msg == nil or msg.Event == nil then
+            return
+        end
+        if msg.Event == "Started-Waiting-Period" then
+            -- 自动支付
+            ao.send({ Target = ao.id, Action = "AutoPay" })
+        elseif (msg.Event == "Tick" or msg.Event == "Started-Game") and not InAction then
+            InAction = true  -- 加锁
+            ao.send({ Target = Game, Action = "GetGameState" })
+        elseif InAction then --  InAction 逻辑添加
+            print("等待最新响应，跳过")
+        end
+        print(colors.green .. msg.Event .. ": " .. msg.Data .. colors.reset)
+    end
+)
+
+-- 触发游戏状态更新的handler。
+Handlers.add(
+    "GetGameStateOnTick",
+    Handlers.utils.hasMatchingTag("Action", "Tick"),
+    function()
+        if not InAction then -- InAction 逻辑添加
+            InAction = true  -- InAction 逻辑添加
+            print(colors.gray .. "获取游戏最新状态" .. colors.reset)
+            ao.send({ Target = Game, Action = "GetGameState" })
+        else
+            print("锁状态")
+        end
+    end
+)
+
+-- 等待期开始时自动付款确认的handler。
+Handlers.add(
+    "AutoPay",
+    Handlers.utils.hasMatchingTag("Action", "AutoPay"),
+    function(msg)
+        print("自动付款")
+        ao.send({ Target = Game, Action = "Transfer", Recipient = Game, Quantity = "1000" })
+    end
+)
+
+-- 接收游戏状态信息后更新游戏状态的handler。
+Handlers.add(
+    "UpdateGameState",
+    Handlers.utils.hasMatchingTag("Action", "GameState"),
+    function(msg)
+        local json = require("json")
+        LatestGameState = json.decode(msg.Data)
+        ao.send({ Target = ao.id, Action = "UpdatedGameState" })
+        print("以获取最新状态")
+        print(LatestGameState)
+    end
+)
+
+-- 根据游戏最新状态往下走
+Handlers.add(
+    "DecideNextAction",
+
+    Handlers.utils.hasMatchingTag("Action", "UpdatedGameState"),
+    function()
+        if LatestGameState.GameMode ~= "Playing" then
+            InAction = false -- InAction 逻辑添加
+            return
+        end
+        DecideNextAction()
+        ao.send({ Target = ao.id, Action = "Tick" })
+    end
+)
+
+-- 被其他玩家击中时自动攻击的handler。
+Handlers.add(
+    "ReturnAttack",
+    Handlers.utils.hasMatchingTag("Action", "Hit"),
+    function(msg)
+        if not InAction then --  InAction 逻辑添加
+            InAction = true  --  InAction 逻辑添加
+            local myEnergy = LatestGameState.Players[ao.id].energy
+            if myEnergy == nil or myEnergy == undefined then
+                print(colors.red .. "错误" .. colors.reset)
+                ao.send({ Target = Game, Action = "Attack-Failed", Reason = "Unable to read energy." })
+            elseif myEnergy == 0 then
+                print(colors.red .. "没能量了，速速移动" .. colors.reset)
+                ao.send({ Target = Game, Action = "Attack-Failed", Reason = "Player has no energy." })
+                local directionMap = { "Up", "Down", "Left", "Right", "UpRight", "UpLeft", "DownRight", "DownLeft" }
+                local randomIndex = math.random(#directionMap)
+                ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = directionMap[randomIndex] })
+            else
+                print(colors.red .. "开始攻击" .. colors.reset)
+                ao.send({ Target = Game, Action = "PlayerAttack", Player = ao.id, AttackEnergy = tostring(myEnergy) })
+                print(colors.red .. "消耗能量" .. myEnergy .. colors.reset)
+            end
+            InAction = false --  InAction 逻辑添加
+            ao.send({ Target = ao.id, Action = "Tick" })
+        else
+            print("锁状态")
+        end
+    end
+)
